@@ -30,83 +30,92 @@ const POLLING_INTERVAL_MINUTES = process.env.POLLING_INTERVAL_MINUTES || 5; // A
 const connections = new Map();
 
 async function checkLiveStreams() {
-  console.log("Checking for live streams...");
-
-  for (const username of TRACKED_STREAMERS) {
-    try {
-      // If connection exists, check if stream is still live
-      if (connections.has(username)) {
-        const session = connections.get(username);
-        const state = session.tiktokLive.getState(); // Get live stream state
-        
-        if (!state.roomId || !state.isConnected) {
-          console.log(`Detected that ${username} is no longer live.`);
-          console.log(state.roomId, state.isConnected);
-          endStream(username);
+    console.log("Checking for live streams...");
+  
+    for (const username of TRACKED_STREAMERS) {
+      try {
+        // If connection exists, check if stream is still live
+        if (connections.has(username)) {
+          const session = connections.get(username);
+          const state = session.tiktokLive.getState(); // Get live stream state
+  
+          if (!state.roomId || !state.isConnected) {
+            console.log(`Detected that ${username} is no longer live.`);
+            console.log(state.roomId, state.isConnected);
+            endStream(username);
+          }
+          continue; // Skip creating a new connection if already tracking
         }
-        continue; // Skip creating a new connection if already tracking
-      }
-
-      console.log(`Attempting to connect to ${username}...`);
-      const tiktokLive = new WebcastPushConnection(username);
-
-      // Initialize connection entry
-      connections.set(username, {
-        live: false,
-        streamStartTime: null,
-        gifts: {},
-        tiktokLive,
-      });
-
-      // Connect to TikTok live stream
-      tiktokLive
-        .connect()
-        .then(() => {
+  
+        console.log(`Attempting to connect to ${username}...`);
+        const tiktokLive = new WebcastPushConnection(username);
+  
+        // Initialize connection entry
+        connections.set(username, {
+          live: false,
+          streamStartTime: null,
+          gifts: {},
+          tiktokLive,
+        });
+  
+        // Connect to TikTok live stream
+        try {
+          await tiktokLive.connect();
           if (!connections.get(username).live) {
             console.log(`${username} started a live stream.`);
             connections.get(username).live = true;
             connections.get(username).streamStartTime = new Date();
           }
-        })
-        .catch((err) => {
+        } catch (err) {
           console.error(`Error connecting to ${username}:`, err);
+            // console.log(String(err).includes('initial room data'));
+          if (String(err).includes('initial room data')) {
+            console.log(`Waiting for 1 minute before retrying ${username}...`);
+            await new Promise((resolve) => setTimeout(resolve, 60000)); // 1-minute delay
+          }
+  
+          endStream(username);
+          continue; // Skip further processing for this username
+        }
+  
+        // Handle gifts
+        tiktokLive.on("gift", (data) => {
+          try {
+            if (!connections.has(username)) return;
+            const { giftName, giftId, diamondCount, repeatCount } = data;
+            console.log(
+              `${username} received ${repeatCount}x ${giftName} (id: ${giftId}) (${diamondCount} diamonds each).`
+            );
+  
+            const session = connections.get(username);
+            if (!session.live) return;
+  
+            const gifts = session.gifts;
+            if (!gifts[giftName]) {
+              gifts[giftName] = { gift_value: diamondCount, quantity: 0 };
+            }
+            gifts[giftName].quantity += repeatCount;
+          } catch (error) {
+            console.error(`Error processing gift for ${username}:`, error);
+          }
+        });
+  
+        // Handle stream end
+        tiktokLive.on("streamEnd", () => {
+          console.log(`${username}'s stream ended (event detected).`);
           endStream(username);
         });
-
-      // Handle gifts
-      tiktokLive.on("gift", (data) => {
-        try {
-          if (!connections.has(username)) return;
-          const { giftName, giftId, diamondCount, repeatCount } = data;
-          console.log(
-            `${username} received ${repeatCount}x ${giftName} (id: ${giftId}) (${diamondCount} diamonds each).`
-          );
-
-          const session = connections.get(username);
-          if (!session.live) return;
-
-          const gifts = session.gifts;
-          if (!gifts[giftName]) {
-            gifts[giftName] = { gift_value: diamondCount, quantity: 0 };
-          }
-          gifts[giftName].quantity += repeatCount;
-        } catch (error) {
-          console.error(`Error processing gift for ${username}:`, error);
-        }
-      });
-
-      // Handle stream end
-      tiktokLive.on("streamEnd", () => {
-        console.log(`${username}'s stream ended (event detected).`);
-        endStream(username);
-      });
-
-    } catch (error) {
-      console.error(`Error in checkLiveStreams for ${username}:`, error);
+  
+        // Delay before moving to the next streamer to prevent rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1-second delay
+  
+      } catch (error) {
+        console.error(`Error in checkLiveStreams for ${username}:`, error);
+      }
     }
   }
-}
-
+  
+  
 async function endStream(username) {
   try {
     if (!connections.has(username) || !connections.get(username).live) return;
