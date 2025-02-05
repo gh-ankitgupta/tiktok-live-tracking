@@ -13,6 +13,13 @@ const StreamSchema = new mongoose.Schema({
   duration: Number,
   gifts: [GiftSchema],
   total_gift_value: Number,
+  top_gifters: [
+    {
+      userId: String,
+      total_diamonds: Number,
+      gifts: Object,
+    },
+  ],
 });
 
 const HistorySchema = new mongoose.Schema({
